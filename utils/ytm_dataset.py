@@ -18,7 +18,7 @@ class RubinDataset(Dataset):
 
         self.examples = []
 
-        src_files = Path("./eo_data/").glob("*-eval.txt") if evaluate else Path("./eo_data/").glob("1.txt")
+        src_files = Path("./eo_data/").glob("*-eval.txt") if evaluate else Path("./eo_data/").glob("*.txt")
         for src_file in src_files:
             print("🔥", src_file)
         lines = src_file.read_text(encoding="utf-8").splitlines()

@@ -30,6 +30,7 @@ import random
 import re
 import shutil
 from typing import Dict, List, Tuple
+from utils.ytm_dataset import RubinDataset
 
 import numpy as np
 import torch
@@ -130,7 +131,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False):
     if args.line_by_line:
         return LineByLineTextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
     else:
-        return TextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
+        return RubinDataset(evaluate)
 
 
 def set_seed(args):
