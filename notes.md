@@ -14,5 +14,4 @@ yttm bpe --data eo_data\rubin.txt --model models\rubin_yttm\rubin_yttm.model --v
 Command line to start training from scratch which worked for me (uses vocabulary from previous step)
 
 ``` 
-python run_language_modeling.py --model_type gpt2 --tokenizer_class YTEncoder --tokenizer_name models\rubin_yttm\rubin_yttm.model --do_train --learning_rate 1e-4 --num_train_epochs 5 --save_total_limit 2 --save_steps 2000 --per_gpu_train_batch_size 1 --evaluate_during_training --seed 42 --train_data_file eo_data\rubin.txt --output_dir models\Output
-```
+--model_type gpt2 --tokenizer_class YTEncoder --tokenizer_name models\rubin_yttm\rubin_yttm.model --do_train --learning_rate 1e-4 --num_train_epochs 5 --save_total_limit 2 --save_steps 2000 --per_gpu_train_batch_size 1 --evaluate_during_training --seed 42 --logging_steps 10 --train_data_file eo_data\rubin.txt --eval_data_file eo_data\01-eval.txt --output_dir models\Output```

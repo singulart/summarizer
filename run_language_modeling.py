@@ -31,13 +31,14 @@ import re
 import shutil
 from typing import Dict, List, Tuple
 from utils.ytm_dataset import RubinDataset
-
+from yt_encoder import YTEncoder
 import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
+from dataclasses import dataclass
 
 from transformers import (
     MODEL_WITH_LM_HEAD_MAPPING,
@@ -63,6 +64,23 @@ logger = logging.getLogger(__name__)
 
 MODEL_CONFIG_CLASSES = list(MODEL_WITH_LM_HEAD_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+
+
+@dataclass
+class MovingLoss:
+    steps: int = 1000
+    avg_loss = (0.0, 0.0)
+
+    def add(self, batch_loss: float):
+        k_s = 1 - 1/self.steps
+        avg_loss = self.avg_loss
+        self.avg_loss = (self.avg_loss[0] * k_s + batch_loss * (1-k_s),
+                         self.avg_loss[1] * k_s + 1.0 * (1-k_s))
+
+    @property
+    def loss(self):
+        if self.avg_loss[1]:
+            return self.avg_loss[0] / self.avg_loss[1]
 
 
 class TextDataset(Dataset):
@@ -131,7 +149,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False):
     if args.line_by_line:
         return LineByLineTextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
     else:
-        return RubinDataset(evaluate)
+        return TextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
 
 
 def set_seed(args):
@@ -313,7 +331,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
             logger.info("  Starting fine-tuning.")
 
     tr_loss, logging_loss = 0.0, 0.0
-
+    moving_loss = MovingLoss(10000 // args.logging_steps)
     model.zero_grad()
     train_iterator = trange(
         epochs_trained, int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0]
@@ -351,6 +369,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
                 loss.backward()
 
             tr_loss += loss.item()
+            moving_loss.add(loss.item())
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 if args.fp16:
                     torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
@@ -372,6 +391,8 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
                     tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
                     tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
                     logging_loss = tr_loss
+                    epoch_iterator.set_postfix(MovingLoss=f'{moving_loss.loss:.2f}',
+                                               Perplexity=f'{torch.exp(torch.tensor(moving_loss.loss)):.2f}')
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
                     checkpoint_prefix = "checkpoint"
@@ -525,6 +546,12 @@ def main():
         help="Optional pretrained tokenizer name or path if not the same as model_name_or_path. If both are None, initialize a new tokenizer.",
     )
     parser.add_argument(
+        "--tokenizer_class",
+        default="",
+        type=str,
+        help="Optional pre-trained tokenizer class"
+    )
+    parser.add_argument(
         "--cache_dir",
         default=None,
         type=str,
@@ -603,6 +630,8 @@ def main():
         help="For fp16: Apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3']."
         "See details at https://nvidia.github.io/apex/amp.html",
     )
+    parser.add_argument("--do_lower_case", action='store_true',
+                        help="Set this flag if you are using an uncased model.")
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--server_ip", type=str, default="", help="For distant debugging.")
     parser.add_argument("--server_port", type=str, default="", help="For distant debugging.")
@@ -680,7 +709,9 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()  # Barrier to make sure only the first process in distributed training download model & vocab
 
-    if args.config_name:
+    if args.model_type:
+        config = AutoConfig.for_model(args.model_type)
+    elif args.config_name:
         config = AutoConfig.from_pretrained(args.config_name, cache_dir=args.cache_dir)
     elif args.model_name_or_path:
         config = AutoConfig.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
@@ -692,15 +723,13 @@ def main():
             "and load it from here, using --config_name"
         )
 
-    if args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, cache_dir=args.cache_dir)
-    elif args.model_name_or_path:
-        tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
-    else:
-        raise ValueError(
-            "You are instantiating a new tokenizer from scratch. This is not supported, but you can do it from another script, save it,"
-            "and load it from here, using --tokenizer_name"
-        )
+    tokenizer_class = ''
+    if args.tokenizer_class:
+        tokenizer_class = globals()[args.tokenizer_class]
+    print("Tokenizer is %s" % tokenizer_class)
+    tokenizer = tokenizer_class.from_pretrained(
+            args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, do_lower_case=args.do_lower_case)
+
 
     if args.block_size <= 0:
         args.block_size = tokenizer.max_len
@@ -759,7 +788,12 @@ def main():
 
         # Load a trained model and vocabulary that you have fine-tuned
         model = AutoModelWithLMHead.from_pretrained(args.output_dir)
-        tokenizer = AutoTokenizer.from_pretrained(args.output_dir)
+        tokenizer_class = ''
+        if args.tokenizer_class:
+            tokenizer_class = globals()[args.tokenizer_class]
+        print("Tokenizer is %s" % tokenizer_class)
+        tokenizer = tokenizer_class.from_pretrained(
+            args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, do_lower_case=args.do_lower_case)
         model.to(args.device)
 
     # Evaluation

@@ -71,3 +71,9 @@ class YTEncoder(PreTrainedTokenizer):
     def _convert_id_to_token(self, index):
         """Converts an index (integer) in a token (str) using the vocab."""
         return index
+
+    @property
+    def vocab_size(self):
+        return self.bpe.bpe_cython.vocab_size()
+
+

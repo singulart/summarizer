@@ -128,3 +128,17 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+/models/Output/
+/eo_data/2.txt
+/eo_data/3.txt
+/eo_data/4.txt
+/eo_data/5.txt
+/eo_data/6.txt
+/eo_data/7.txt
+/eo_data/8.txt
+/eo_data/9.txt
+/eo_data/10.txt
+/eo_data/gpt2_cached_lm_1024_01-eval.txt
+/eo_data/gpt2_cached_lm_1024_rubin.txt
+/runs/
+/models/
